@@ -26,6 +26,10 @@ if(NOT GIT_DESCRIBE)
 	endif()
 endif()
 
+# qvr fork: the fork's version label, wherever it is built (its source zip has no git history to describe)
+set(GIT_DESCRIBE "2.0.0-alpha11-qvr1")
+message(STATUS "qvr fork: version label \"${GIT_DESCRIBE}\"")
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
 	add_compile_options(/EHsc)
 	message(STATUS "working around exceptions not being enabled by default on clang-cl")
