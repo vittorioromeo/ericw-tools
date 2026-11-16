@@ -382,6 +382,8 @@ light_settings::light_settings()
           "qvr fork: bounced light traced from N x N samples per luxel (0: as -extra); must divide -extra"},
       rtpackets{this, "rtpackets", 0, 0, 3, &performance_group,
           "qvr fork: occlusion rays in packets of 8 (2), also flagged coherent (3); 0: one at a time"},
+      bouncegate{this, "bouncegate", 0.0, 0.0, 255.0, &performance_group,
+          "qvr fork: bounced light weaker than this is skipped (0: as stock, 0.01)"},
       exportobj{this, "exportobj", false, &output_group, "export an .OBJ for inspection"},
       lmshift{this, "lmshift", 4, &output_group,
           "force a specified lmshift to be applied to the entire map; this is useful if you want to re-light a map with higher quality BSPX lighting without the sources. Will add the LMSHIFT lump to the BSP."},
