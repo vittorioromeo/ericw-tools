@@ -378,6 +378,10 @@ light_settings::light_settings()
       litonly{this, "litonly", false, &output_group, "only write .lit file, don't modify BSP"},
       nolights{this, "nolights", false, &output_group, "ignore light entities (only sunlight/minlight)"},
       facestyles{this, "facestyles", 4, &output_group, "max amount of styles per face; requires BSPX lump if > 4"},
+      bounceextra{this, "bounceextra", 0, 0, 4, &performance_group,
+          "qvr fork: bounced light traced from N x N samples per luxel (0: as -extra); must divide -extra"},
+      rtpackets{this, "rtpackets", 0, 0, 3, &performance_group,
+          "qvr fork: occlusion rays in packets of 8 (2), also flagged coherent (3); 0: one at a time"},
       exportobj{this, "exportobj", false, &output_group, "export an .OBJ for inspection"},
       lmshift{this, "lmshift", 4, &output_group,
           "force a specified lmshift to be applied to the entire map; this is useful if you want to re-light a map with higher quality BSPX lighting without the sources. Will add the LMSHIFT lump to the BSP."},
@@ -486,6 +490,8 @@ void light_settings::initialize(int argc, const char **argv)
 
 void light_settings::light_postinitialize(int argc, const char **argv)
 {
+    qvr_ray_packets = rtpackets.value();
+
     if (gate.value() > 1) {
         logging::print("WARNING: -gate value greater than 1 may cause artifacts\n");
     }

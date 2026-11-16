@@ -2005,6 +2005,43 @@ LightFace_SurfaceLight(const mbsp_t *bsp, lightsurf_t *lightsurf, lightmapdict_t
         return;
     }
 
+    // qvr fork: -bounceextra K traces the bounced light from K x K samples per luxel instead of -extra's E x E: one
+    // sample of each (E/K) x (E/K) block (the unoccluded one nearest its centre) stands for the block, and its light is
+    // given to the block's other unoccluded samples (with their own dirt). Bounced light is smooth, so this is
+    // (E/K)^2 times fewer rays for a change well under a luxel.
+    const int extra = light_options.extra.value();
+    const int bounceextra = light_options.bounceextra.value();
+    const int stride = (bounce_depth.has_value() && bounceextra > 0 && bounceextra < extra && extra % bounceextra == 0)
+                           ? extra / bounceextra
+                           : 1;
+    const int lsw = lightsurf->width, lsh = lightsurf->height;
+    thread_local std::vector<int> reps;
+    reps.clear();
+    if (stride > 1) {
+        const float c = (stride - 1) * 0.5f;
+        for (int bt = 0; bt < lsh; bt += stride) {
+            for (int bs = 0; bs < lsw; bs += stride) {
+                int best = -1;
+                float bestd = 1e30f;
+                for (int t = bt; t < std::min(bt + stride, lsh); t++) {
+                    for (int s = bs; s < std::min(bs + stride, lsw); s++) {
+                        const int i = t * lsw + s;
+                        if (lightsurf->samples[i].occluded)
+                            continue;
+                        const float d = (s - bs - c) * (s - bs - c) + (t - bt - c) * (t - bt - c);
+                        if (d < bestd) {
+                            bestd = d;
+                            best = i;
+                        }
+                    }
+                }
+                if (best >= 0)
+                    reps.push_back(best);
+            }
+        }
+    }
+    const int numcandidates = stride > 1 ? static_cast<int>(reps.size()) : static_cast<int>(lightsurf->samples.size());
+
     for (const auto &surf_ptr : EmissiveLightSurfaces()) {
         auto &vpl = *surf_ptr->vpl.get();
 
@@ -2022,7 +2059,8 @@ LightFace_SurfaceLight(const mbsp_t *bsp, lightsurf_t *lightsurf, lightmapdict_t
             for (int c = 0; c < vpl.points.size(); c++) {
                 rs.clearPushedRays();
 
-                for (int i = 0; i < lightsurf->samples.size(); i++) {
+                for (int ci = 0; ci < numcandidates; ci++) {
+                    const int i = stride > 1 ? reps[ci] : ci;
                     const auto &sample = lightsurf->samples[i];
 
                     if (sample.occluded)
@@ -2072,14 +2110,32 @@ LightFace_SurfaceLight(const mbsp_t *bsp, lightsurf_t *lightsurf, lightmapdict_t
 
                     const ray_io &ray = rs.getRay(j);
                     const int i = ray.index;
-                    qvec3f indirect = rs.getPushedRayColor(j);
+                    const qvec3f raycolor = rs.getPushedRayColor(j);
 
                     // Q_assert(!std::isnan(indirect[0]));
+
+                    if (stride > 1) {
+                        // qvr fork: the block this sample stands for
+                        const int bs = (i % lsw) / stride * stride, bt = (i / lsw) / stride * stride;
+                        for (int t = bt; t < std::min(bt + stride, lsh); t++) {
+                            for (int s = bs; s < std::min(bs + stride, lsw); s++) {
+                                const int m = t * lsw + s;
+                                if (lightsurf->samples[m].occluded)
+                                    continue;
+                                const qvec3f indirect = raycolor * Dirt_GetScaleFactor(
+                                                                       cfg, lightsurf->samples[m].occlusion, nullptr, 0.0, lightsurf);
+                                lightmap->samples[m].color += indirect;
+                                lightmap->bounce_color += indirect;
+                            }
+                        }
+                        hit = true;
+                        continue;
+                    }
 
                     // Use dirt scaling on the surface lighting.
                     const float dirtscale =
                         Dirt_GetScaleFactor(cfg, lightsurf->samples[i].occlusion, nullptr, 0.0, lightsurf);
-                    indirect *= dirtscale;
+                    qvec3f indirect = raycolor * dirtscale;
 
                     lightsample_t &sample = lightmap->samples[i];
                     sample.color += indirect;
@@ -2105,6 +2161,46 @@ LightPoint_SurfaceLight(const mbsp_t *bsp, const std::vector<uint8_t> *pvs, rays
 {
     const settings::worldspawn_keys &cfg = light_options;
     const float surflight_gate = light_options.emissivequality.value() == emissivequality_t::HIGH ? 0 : 0.01f;
+
+    if (qvr_ray_packets >= 2) {
+        // qvr fork: every surface light point's ray to this grid point in one stream (traced in packets), added in
+        // the same order as below: the same result.
+        rs.clearPushedRays();
+        for (const auto &surf : EmissiveLightSurfaces()) {
+            const surfacelight_t &vpl = *surf->vpl;
+            if (SurfaceLight_VisCull(bsp, pvs, surf)) {
+                continue;
+            }
+            for (int c = 0; c < vpl.points.size(); c++) {
+                for (auto &vpl_settings : vpl.styles) {
+                    if (vpl_settings.bounce_level.has_value() != bounce)
+                        continue;
+                    const qvec3f pos = vpl.points[c];
+                    qvec3f dir = surfpoint - pos;
+                    const float dist = qv::length(dir);
+                    if (dist == 0.0f)
+                        dir = {0, 0, 1};
+                    else
+                        dir /= dist;
+                    const qvec3f indirect = GetSurfaceLighting(
+                        cfg, vpl, vpl_settings, dir, dist, qvec3f(), false, standard_scale, sky_scale, hotspot_clamp);
+                    if (!qv::gate(indirect, surflight_gate)) {
+                        const qvec3f back = -dir;
+                        rs.pushRay(vpl_settings.style, pos, dir, dist, &indirect, &back);
+                    }
+                }
+            }
+        }
+        rs.tracePushedRaysOcclusion(nullptr, CHANNEL_MASK_DEFAULT);
+        const int numrays = rs.numPushedRays();
+        for (int j = 0; j < numrays; j++) {
+            if (rs.getPushedRayOccluded(j))
+                continue;
+            const ray_io &ray = rs.getRay(j);
+            result.add(rs.getPushedRayColor(j), ray.index, ray.normalcontrib, 1.0f);
+        }
+        return;
+    }
 
     for (const auto &surf : EmissiveLightSurfaces()) {
         const surfacelight_t &vpl = *surf->vpl;

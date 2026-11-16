@@ -710,6 +710,8 @@ struct lightmap_intermediate_data_t
 {
     std::vector<const lightmap_t *> sorted;
     int lightofs = -1, vanilla_lightofs = -1;
+    // qvr fork: the sizes asked for (-1: none), given their offsets afterwards in face order (deterministic output)
+    int64_t size = -1, vanilla_size = -1;
 };
 
 // temp
@@ -1071,8 +1073,7 @@ void SaveLightmapSurfaces(bspdata_t *bspdata, const fs::path &source)
                     CalculateLightmapStyles(bsp, f, nullptr, &surf, surf.extents, lightmap_size, intermediate_data[i]);
 
                 if (!light_options.novanilla.value()) {
-                    intermediate_data[i].vanilla_lightofs =
-                        GetFileSpace(lightmap_size, surf.vanilla_extents.numsamples() * num_styles);
+                    intermediate_data[i].vanilla_size = surf.vanilla_extents.numsamples() * num_styles;
                 }
             } else if (faces_sup.empty()) {
                 num_styles =
@@ -1083,18 +1084,28 @@ void SaveLightmapSurfaces(bspdata_t *bspdata, const fs::path &source)
             } else {
                 num_styles =
                     CalculateLightmapStyles(bsp, f, nullptr, &surf, surf.extents, lightmap_size, intermediate_data[i]);
-                intermediate_data[i].vanilla_lightofs =
-                    GetFileSpace(lightmap_size, surf.vanilla_extents.numsamples() * num_styles);
+                intermediate_data[i].vanilla_size = surf.vanilla_extents.numsamples() * num_styles;
             }
 
             if (num_styles) {
-                intermediate_data[i].lightofs = GetFileSpace(lightmap_size, surf.extents.numsamples() * num_styles);
+                intermediate_data[i].size = surf.extents.numsamples() * num_styles;
             }
 
             if (Lightsurf_HasColor(surf)) {
                 has_color = true;
             }
         });
+
+        // qvr fork: the faces' lightmaps are packed in face order, not in the threads' finishing order, so two runs
+        // with the same input write the same bytes.
+        for (auto &id : intermediate_data) {
+            if (id.vanilla_size >= 0) {
+                id.vanilla_lightofs = GetFileSpace(lightmap_size, id.vanilla_size);
+            }
+            if (id.size >= 0) {
+                id.lightofs = GetFileSpace(lightmap_size, id.size);
+            }
+        }
 
         // auto-generate .lit file if appropriate
         logging::print(logging::flag::STAT, "map uses color: {}\n", static_cast<bool>(has_color));

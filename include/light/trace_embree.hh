@@ -29,6 +29,9 @@
 #include <embree4/rtcore.h>
 #include <embree4/rtcore_ray.h>
 
+// qvr fork: -rtpackets (0: one ray at a time as stock; 2: occlusion rays in packets of 8; 3: also flagged coherent)
+extern int qvr_ray_packets;
+
 struct mbsp_t;
 class modelinfo_t;
 struct mface_t;
@@ -282,8 +285,40 @@ public:
 
         ray_source_info ctx2(this, self, shadowmask);
         RTCOccludedArguments embree4_args = ctx2.setup_occluded_arguments();
-        for (auto &ray : _rays)
-            rtcOccluded1(scene, &ray.ray.ray, &embree4_args);
+        const size_t n = _rays.size();
+        if (qvr_ray_packets < 2 || n < 4) {
+            for (auto &ray : _rays)
+                rtcOccluded1(scene, &ray.ray.ray, &embree4_args);
+            return;
+        }
+        // qvr fork (-rtpackets): the stream's rays (one light or one bounce point to one face's samples: coherent)
+        // in packets of 8; same rays, same results.
+        if (qvr_ray_packets >= 3)
+            embree4_args.flags = static_cast<RTCRayQueryFlags>(embree4_args.flags | RTC_RAY_QUERY_FLAG_COHERENT);
+        for (size_t j = 0; j < n; j += 8) {
+            alignas(32) RTCRay8 r8;
+            alignas(32) int valid[8];
+            const size_t m = std::min<size_t>(8, n - j);
+            for (size_t k = 0; k < 8; k++) {
+                const RTCRay &r = _rays[j + (k < m ? k : 0)].ray.ray;
+                valid[k] = k < m ? -1 : 0;
+                r8.org_x[k] = r.org_x;
+                r8.org_y[k] = r.org_y;
+                r8.org_z[k] = r.org_z;
+                r8.tnear[k] = r.tnear;
+                r8.dir_x[k] = r.dir_x;
+                r8.dir_y[k] = r.dir_y;
+                r8.dir_z[k] = r.dir_z;
+                r8.time[k] = r.time;
+                r8.tfar[k] = r.tfar;
+                r8.mask[k] = r.mask;
+                r8.id[k] = r.id;
+                r8.flags[k] = r.flags;
+            }
+            rtcOccluded8(valid, scene, &r8, &embree4_args);
+            for (size_t k = 0; k < m; k++)
+                _rays[j + k].ray.ray.tfar = r8.tfar[k];
+        }
     }
 
     inline bool getPushedRayOccluded(size_t j) const { return (_rays[j].ray.ray.tfar < 0.0f); }

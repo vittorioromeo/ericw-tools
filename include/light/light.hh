@@ -420,6 +420,8 @@ public:
     setting_bool litonly;
     setting_bool nolights;
     setting_int32 facestyles;
+    setting_int32 bounceextra; // qvr fork
+    setting_int32 rtpackets; // qvr fork
     setting_bool exportobj;
     setting_int32 lmshift;
     setting_bool lightgrid;

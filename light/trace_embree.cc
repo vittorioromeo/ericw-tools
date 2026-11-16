@@ -28,6 +28,7 @@
 #include <climits>
 #include <set>
 
+int qvr_ray_packets = 0;
 sceneinfo skygeom; // sky. always occludes.
 sceneinfo solidgeom; // solids. always occludes.
 sceneinfo filtergeom; // conditional occluders.. needs to run ray intersection filter
